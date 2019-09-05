@@ -55,7 +55,7 @@ class App extends Component {
 
         queryParams.projectId = this.state.project ? this.state.project.id : '';
         queryParams.dateFrom = this.state.dateFrom ? Moment(this.state.dateFrom).format('YYYY-MM-DD') : '';
-        queryParams.dateTo = this.state.dateTo ? Moment(this.state.dateFrom).format('YYYY-MM-DD') : '';
+        queryParams.dateTo = this.state.dateTo ? Moment(this.state.dateTo).format('YYYY-MM-DD') : '';
 
         const url = '/api/users/top-by-time?' + QueryString.stringify(queryParams);
         axios.get(url).then(res => {
