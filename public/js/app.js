@@ -14781,6 +14781,112 @@ function toDate(argument) {
 
 /***/ }),
 
+/***/ "./node_modules/decode-uri-component/index.js":
+/*!****************************************************!*\
+  !*** ./node_modules/decode-uri-component/index.js ***!
+  \****************************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+var token = '%[a-f0-9]{2}';
+var singleMatcher = new RegExp(token, 'gi');
+var multiMatcher = new RegExp('(' + token + ')+', 'gi');
+
+function decodeComponents(components, split) {
+	try {
+		// Try to decode the entire string first
+		return decodeURIComponent(components.join(''));
+	} catch (err) {
+		// Do nothing
+	}
+
+	if (components.length === 1) {
+		return components;
+	}
+
+	split = split || 1;
+
+	// Split the array in 2 parts
+	var left = components.slice(0, split);
+	var right = components.slice(split);
+
+	return Array.prototype.concat.call([], decodeComponents(left), decodeComponents(right));
+}
+
+function decode(input) {
+	try {
+		return decodeURIComponent(input);
+	} catch (err) {
+		var tokens = input.match(singleMatcher);
+
+		for (var i = 1; i < tokens.length; i++) {
+			input = decodeComponents(tokens, i).join('');
+
+			tokens = input.match(singleMatcher);
+		}
+
+		return input;
+	}
+}
+
+function customDecodeURIComponent(input) {
+	// Keep track of all the replacements and prefill the map with the `BOM`
+	var replaceMap = {
+		'%FE%FF': '\uFFFD\uFFFD',
+		'%FF%FE': '\uFFFD\uFFFD'
+	};
+
+	var match = multiMatcher.exec(input);
+	while (match) {
+		try {
+			// Decode as big chunks as possible
+			replaceMap[match[0]] = decodeURIComponent(match[0]);
+		} catch (err) {
+			var result = decode(match[0]);
+
+			if (result !== match[0]) {
+				replaceMap[match[0]] = result;
+			}
+		}
+
+		match = multiMatcher.exec(input);
+	}
+
+	// Add `%C2` at the end of the map to make sure it does not replace the combinator before everything else
+	replaceMap['%C2'] = '\uFFFD';
+
+	var entries = Object.keys(replaceMap);
+
+	for (var i = 0; i < entries.length; i++) {
+		// Replace all decoded components
+		var key = entries[i];
+		input = input.replace(new RegExp(key, 'g'), replaceMap[key]);
+	}
+
+	return input;
+}
+
+module.exports = function (encodedURI) {
+	if (typeof encodedURI !== 'string') {
+		throw new TypeError('Expected `encodedURI` to be of type `string`, got `' + typeof encodedURI + '`');
+	}
+
+	try {
+		encodedURI = encodedURI.replace(/\+/g, ' ');
+
+		// Try the built in decoder first
+		return decodeURIComponent(encodedURI);
+	} catch (err) {
+		// Fallback to a more advanced decoder
+		return customDecodeURIComponent(encodedURI);
+	}
+};
+
+
+/***/ }),
+
 /***/ "./node_modules/gud/index.js":
 /*!***********************************!*\
   !*** ./node_modules/gud/index.js ***!
@@ -46232,6 +46338,310 @@ module.exports = ReactPropTypesSecret;
 
 /***/ }),
 
+/***/ "./node_modules/query-string/index.js":
+/*!********************************************!*\
+  !*** ./node_modules/query-string/index.js ***!
+  \********************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+const strictUriEncode = __webpack_require__(/*! strict-uri-encode */ "./node_modules/strict-uri-encode/index.js");
+const decodeComponent = __webpack_require__(/*! decode-uri-component */ "./node_modules/decode-uri-component/index.js");
+const splitOnFirst = __webpack_require__(/*! split-on-first */ "./node_modules/split-on-first/index.js");
+
+function encoderForArrayFormat(options) {
+	switch (options.arrayFormat) {
+		case 'index':
+			return key => (result, value) => {
+				const index = result.length;
+				if (value === undefined) {
+					return result;
+				}
+
+				if (value === null) {
+					return [...result, [encode(key, options), '[', index, ']'].join('')];
+				}
+
+				return [
+					...result,
+					[encode(key, options), '[', encode(index, options), ']=', encode(value, options)].join('')
+				];
+			};
+
+		case 'bracket':
+			return key => (result, value) => {
+				if (value === undefined) {
+					return result;
+				}
+
+				if (value === null) {
+					return [...result, [encode(key, options), '[]'].join('')];
+				}
+
+				return [...result, [encode(key, options), '[]=', encode(value, options)].join('')];
+			};
+
+		case 'comma':
+			return key => (result, value, index) => {
+				if (value === null || value === undefined || value.length === 0) {
+					return result;
+				}
+
+				if (index === 0) {
+					return [[encode(key, options), '=', encode(value, options)].join('')];
+				}
+
+				return [[result, encode(value, options)].join(',')];
+			};
+
+		default:
+			return key => (result, value) => {
+				if (value === undefined) {
+					return result;
+				}
+
+				if (value === null) {
+					return [...result, encode(key, options)];
+				}
+
+				return [...result, [encode(key, options), '=', encode(value, options)].join('')];
+			};
+	}
+}
+
+function parserForArrayFormat(options) {
+	let result;
+
+	switch (options.arrayFormat) {
+		case 'index':
+			return (key, value, accumulator) => {
+				result = /\[(\d*)\]$/.exec(key);
+
+				key = key.replace(/\[\d*\]$/, '');
+
+				if (!result) {
+					accumulator[key] = value;
+					return;
+				}
+
+				if (accumulator[key] === undefined) {
+					accumulator[key] = {};
+				}
+
+				accumulator[key][result[1]] = value;
+			};
+
+		case 'bracket':
+			return (key, value, accumulator) => {
+				result = /(\[\])$/.exec(key);
+				key = key.replace(/\[\]$/, '');
+
+				if (!result) {
+					accumulator[key] = value;
+					return;
+				}
+
+				if (accumulator[key] === undefined) {
+					accumulator[key] = [value];
+					return;
+				}
+
+				accumulator[key] = [].concat(accumulator[key], value);
+			};
+
+		case 'comma':
+			return (key, value, accumulator) => {
+				const isArray = typeof value === 'string' && value.split('').indexOf(',') > -1;
+				const newValue = isArray ? value.split(',') : value;
+				accumulator[key] = newValue;
+			};
+
+		default:
+			return (key, value, accumulator) => {
+				if (accumulator[key] === undefined) {
+					accumulator[key] = value;
+					return;
+				}
+
+				accumulator[key] = [].concat(accumulator[key], value);
+			};
+	}
+}
+
+function encode(value, options) {
+	if (options.encode) {
+		return options.strict ? strictUriEncode(value) : encodeURIComponent(value);
+	}
+
+	return value;
+}
+
+function decode(value, options) {
+	if (options.decode) {
+		return decodeComponent(value);
+	}
+
+	return value;
+}
+
+function keysSorter(input) {
+	if (Array.isArray(input)) {
+		return input.sort();
+	}
+
+	if (typeof input === 'object') {
+		return keysSorter(Object.keys(input))
+			.sort((a, b) => Number(a) - Number(b))
+			.map(key => input[key]);
+	}
+
+	return input;
+}
+
+function removeHash(input) {
+	const hashStart = input.indexOf('#');
+	if (hashStart !== -1) {
+		input = input.slice(0, hashStart);
+	}
+
+	return input;
+}
+
+function extract(input) {
+	input = removeHash(input);
+	const queryStart = input.indexOf('?');
+	if (queryStart === -1) {
+		return '';
+	}
+
+	return input.slice(queryStart + 1);
+}
+
+function parseValue(value, options) {
+	if (options.parseNumbers && !Number.isNaN(Number(value)) && (typeof value === 'string' && value.trim() !== '')) {
+		value = Number(value);
+	} else if (options.parseBooleans && value !== null && (value.toLowerCase() === 'true' || value.toLowerCase() === 'false')) {
+		value = value.toLowerCase() === 'true';
+	}
+
+	return value;
+}
+
+function parse(input, options) {
+	options = Object.assign({
+		decode: true,
+		sort: true,
+		arrayFormat: 'none',
+		parseNumbers: false,
+		parseBooleans: false
+	}, options);
+
+	const formatter = parserForArrayFormat(options);
+
+	// Create an object with no prototype
+	const ret = Object.create(null);
+
+	if (typeof input !== 'string') {
+		return ret;
+	}
+
+	input = input.trim().replace(/^[?#&]/, '');
+
+	if (!input) {
+		return ret;
+	}
+
+	for (const param of input.split('&')) {
+		let [key, value] = splitOnFirst(param.replace(/\+/g, ' '), '=');
+
+		// Missing `=` should be `null`:
+		// http://w3.org/TR/2012/WD-url-20120524/#collect-url-parameters
+		value = value === undefined ? null : decode(value, options);
+		formatter(decode(key, options), value, ret);
+	}
+
+	for (const key of Object.keys(ret)) {
+		const value = ret[key];
+		if (typeof value === 'object' && value !== null) {
+			for (const k of Object.keys(value)) {
+				value[k] = parseValue(value[k], options);
+			}
+		} else {
+			ret[key] = parseValue(value, options);
+		}
+	}
+
+	if (options.sort === false) {
+		return ret;
+	}
+
+	return (options.sort === true ? Object.keys(ret).sort() : Object.keys(ret).sort(options.sort)).reduce((result, key) => {
+		const value = ret[key];
+		if (Boolean(value) && typeof value === 'object' && !Array.isArray(value)) {
+			// Sort object keys, not values
+			result[key] = keysSorter(value);
+		} else {
+			result[key] = value;
+		}
+
+		return result;
+	}, Object.create(null));
+}
+
+exports.extract = extract;
+exports.parse = parse;
+
+exports.stringify = (object, options) => {
+	if (!object) {
+		return '';
+	}
+
+	options = Object.assign({
+		encode: true,
+		strict: true,
+		arrayFormat: 'none'
+	}, options);
+
+	const formatter = encoderForArrayFormat(options);
+	const keys = Object.keys(object);
+
+	if (options.sort !== false) {
+		keys.sort(options.sort);
+	}
+
+	return keys.map(key => {
+		const value = object[key];
+
+		if (value === undefined) {
+			return '';
+		}
+
+		if (value === null) {
+			return encode(key, options);
+		}
+
+		if (Array.isArray(value)) {
+			return value
+				.reduce(formatter(key), [])
+				.join('&');
+		}
+
+		return encode(key, options) + '=' + encode(value, options);
+	}).filter(x => x.length > 0).join('&');
+};
+
+exports.parseUrl = (input, options) => {
+	return {
+		url: removeHash(input).split('?')[0] || '',
+		query: parse(extract(input), options)
+	};
+};
+
+
+/***/ }),
+
 /***/ "./node_modules/react-datepicker/dist/react-datepicker.css":
 /*!*****************************************************************!*\
   !*** ./node_modules/react-datepicker/dist/react-datepicker.css ***!
@@ -77305,6 +77715,54 @@ if (false) {} else {
 
 /***/ }),
 
+/***/ "./node_modules/split-on-first/index.js":
+/*!**********************************************!*\
+  !*** ./node_modules/split-on-first/index.js ***!
+  \**********************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+module.exports = (string, separator) => {
+	if (!(typeof string === 'string' && typeof separator === 'string')) {
+		throw new TypeError('Expected the arguments to be of type `string`');
+	}
+
+	if (separator === '') {
+		return [string];
+	}
+
+	const separatorIndex = string.indexOf(separator);
+
+	if (separatorIndex === -1) {
+		return [string];
+	}
+
+	return [
+		string.slice(0, separatorIndex),
+		string.slice(separatorIndex + separator.length)
+	];
+};
+
+
+/***/ }),
+
+/***/ "./node_modules/strict-uri-encode/index.js":
+/*!*************************************************!*\
+  !*** ./node_modules/strict-uri-encode/index.js ***!
+  \*************************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+module.exports = str => encodeURIComponent(str).replace(/[!'()*]/g, x => `%${x.charCodeAt(0).toString(16).toUpperCase()}`);
+
+
+/***/ }),
+
 /***/ "./node_modules/style-loader/lib/addStyles.js":
 /*!****************************************************!*\
   !*** ./node_modules/style-loader/lib/addStyles.js ***!
@@ -81006,11 +81464,13 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _TimeChart_TimeChart__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./TimeChart/TimeChart */ "./resources/js/components/TimeChart/TimeChart.js");
 /* harmony import */ var axios_index__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! axios/index */ "./node_modules/axios/index.js");
 /* harmony import */ var axios_index__WEBPACK_IMPORTED_MODULE_4___default = /*#__PURE__*/__webpack_require__.n(axios_index__WEBPACK_IMPORTED_MODULE_4__);
-/* harmony import */ var _helpers_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ../helpers.js */ "./resources/js/helpers.js");
-/* harmony import */ var _App_css__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./App.css */ "./resources/js/components/App.css");
-/* harmony import */ var _App_css__WEBPACK_IMPORTED_MODULE_6___default = /*#__PURE__*/__webpack_require__.n(_App_css__WEBPACK_IMPORTED_MODULE_6__);
-/* harmony import */ var sweetalert2__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! sweetalert2 */ "./node_modules/sweetalert2/dist/sweetalert2.all.js");
-/* harmony import */ var sweetalert2__WEBPACK_IMPORTED_MODULE_7___default = /*#__PURE__*/__webpack_require__.n(sweetalert2__WEBPACK_IMPORTED_MODULE_7__);
+/* harmony import */ var query_string__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! query-string */ "./node_modules/query-string/index.js");
+/* harmony import */ var query_string__WEBPACK_IMPORTED_MODULE_5___default = /*#__PURE__*/__webpack_require__.n(query_string__WEBPACK_IMPORTED_MODULE_5__);
+/* harmony import */ var _helpers_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ../helpers.js */ "./resources/js/helpers.js");
+/* harmony import */ var _App_css__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./App.css */ "./resources/js/components/App.css");
+/* harmony import */ var _App_css__WEBPACK_IMPORTED_MODULE_7___default = /*#__PURE__*/__webpack_require__.n(_App_css__WEBPACK_IMPORTED_MODULE_7__);
+/* harmony import */ var sweetalert2__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! sweetalert2 */ "./node_modules/sweetalert2/dist/sweetalert2.all.js");
+/* harmony import */ var sweetalert2__WEBPACK_IMPORTED_MODULE_8___default = /*#__PURE__*/__webpack_require__.n(sweetalert2__WEBPACK_IMPORTED_MODULE_8__);
 function _typeof(obj) { if (typeof Symbol === "function" && typeof Symbol.iterator === "symbol") { _typeof = function _typeof(obj) { return typeof obj; }; } else { _typeof = function _typeof(obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; }; } return _typeof(obj); }
 
 function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
@@ -81030,6 +81490,7 @@ function _inherits(subClass, superClass) { if (typeof superClass !== "function" 
 function _setPrototypeOf(o, p) { _setPrototypeOf = Object.setPrototypeOf || function _setPrototypeOf(o, p) { o.__proto__ = p; return o; }; return _setPrototypeOf(o, p); }
 
 function _defineProperty(obj, key, value) { if (key in obj) { Object.defineProperty(obj, key, { value: value, enumerable: true, configurable: true, writable: true }); } else { obj[key] = value; } return obj; }
+
 
 
 
@@ -81068,10 +81529,11 @@ function (_Component) {
       // filter chart
       dateFrom: '',
       dateTo: '',
-      userToCompare: null,
+      userIdToCompare: '',
+      userToCompare: '',
       topUsersByTime: [],
       chartType: 'users',
-      project: null
+      project: ''
     });
 
     return _this;
@@ -81088,10 +81550,11 @@ function (_Component) {
     value: function getUsers() {
       var _this2 = this;
 
-      var queryParams = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
-      var queryString = this.buildUsersQuery(queryParams);
-      var url = '/api/users';
-      url += queryString ? '?' + queryString : '';
+      var url = '/api/users?' + query_string__WEBPACK_IMPORTED_MODULE_5___default.a.stringify({
+        orderBy: this.state.orderBy,
+        orderDir: this.state.orderDir,
+        page: this.state.page
+      });
       axios_index__WEBPACK_IMPORTED_MODULE_4___default.a.get(url).then(function (res) {
         _this2.setState({
           users: res.data.data,
@@ -81107,68 +81570,58 @@ function (_Component) {
     value: function getTopUsersByTime() {
       var _this3 = this;
 
-      var queryParams = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
-      var queryString = this.buildTopUsersByTimeQuery(queryParams);
-      var url = '/api/users/top-by-time';
-      url += queryString ? '?' + queryString : '';
+      // always fetch the chart for Top Users because of data consistency if a user is being compared
+      var queryParams = {};
+      queryParams.projectId = this.state.project ? this.state.project.id : '';
+      queryParams.dateFrom = _helpers_js__WEBPACK_IMPORTED_MODULE_6__["formatDate"](this.state.dateFrom);
+      queryParams.dateTo = _helpers_js__WEBPACK_IMPORTED_MODULE_6__["formatDate"](this.state.dateTo);
+      var url = '/api/users/top-by-time?' + query_string__WEBPACK_IMPORTED_MODULE_5___default.a.stringify(queryParams);
       axios_index__WEBPACK_IMPORTED_MODULE_4___default.a.get(url).then(function (res) {
         if (res.data.length == 0) {
-          var message = 'No data found to display on chart';
-
-          if (queryParams.userId) {
-            message = 'No data found for compared user';
-          }
-
-          sweetalert2__WEBPACK_IMPORTED_MODULE_7___default.a.fire({
+          sweetalert2__WEBPACK_IMPORTED_MODULE_8___default.a.fire({
             title: 'No Data',
-            text: message,
+            text: 'No data found to display on chart',
             type: 'error',
             confirmButtonText: 'Okay'
           });
           return;
         }
 
-        if (queryParams.userId) {
-          _this3.setState({
-            userToCompare: res.data[0]
-          });
-        } else {
-          _this3.setState({
-            topUsersByTime: res.data
-          });
-        }
+        _this3.setState({
+          topUsersByTime: res.data
+        });
       })["catch"](function (err) {
         console.log(err);
       });
-    }
-  }, {
-    key: "buildUsersQuery",
-    value: function buildUsersQuery(params) {
-      var queryParams = {
-        orderBy: params.orderBy !== undefined ? params.orderBy : this.state.orderBy,
-        orderDir: params.orderDir !== undefined ? params.orderDir : this.state.orderDir,
-        page: params.page ? params.page : this.state.page
-      };
-      return _helpers_js__WEBPACK_IMPORTED_MODULE_5__["buildQueryString"](queryParams);
-    }
-  }, {
-    key: "buildTopUsersByTimeQuery",
-    value: function buildTopUsersByTimeQuery(params) {
-      var queryParams = {};
 
-      if (params.userId) {
-        queryParams.userId = params.userId;
+      if (this.state.userIdToCompare) {
+        queryParams.userId = this.state.userIdToCompare;
+
+        var _url = '/api/users/top-by-time?' + query_string__WEBPACK_IMPORTED_MODULE_5___default.a.stringify(queryParams);
+
+        axios_index__WEBPACK_IMPORTED_MODULE_4___default.a.get(_url).then(function (res) {
+          if (res.data.length == 0) {
+            sweetalert2__WEBPACK_IMPORTED_MODULE_8___default.a.fire({
+              title: 'No Data',
+              text: 'No data found for compared user',
+              type: 'error',
+              confirmButtonText: 'Okay'
+            });
+
+            _this3.setState({
+              userToCompare: ''
+            });
+
+            return;
+          }
+
+          _this3.setState({
+            userToCompare: res.data[0]
+          });
+        })["catch"](function (err) {
+          console.log(err);
+        });
       }
-
-      if (params.projectId !== undefined) {
-        queryParams.projectId = params.projectId;
-      } else if (this.state.project !== null) {
-        queryParams.projectId = this.state.project.id;
-      }
-
-      queryParams.dateFrom = params.dateFrom ? _helpers_js__WEBPACK_IMPORTED_MODULE_5__["formatDate"](params.dateFrom) : _helpers_js__WEBPACK_IMPORTED_MODULE_5__["formatDate"](this.state.dateFrom);
-      queryParams.dateTo = params.dateTo ? _helpers_js__WEBPACK_IMPORTED_MODULE_5__["formatDate"](params.dateTo) : _helpers_js__WEBPACK_IMPORTED_MODULE_5__["formatDate"](this.state.dateTo);
-      return _helpers_js__WEBPACK_IMPORTED_MODULE_5__["buildQueryString"](queryParams);
     }
   }, {
     key: "initDatabase",
@@ -81177,25 +81630,6 @@ function (_Component) {
 
       // run init db procedure
       axios_index__WEBPACK_IMPORTED_MODULE_4___default.a.post('/api/init-database').then(function (res) {
-        // fetch the users again
-        var queryParams = {
-          orderBy: '',
-          orderDir: '',
-          page: 1
-        };
-
-        _this4.getUsers(queryParams); // fetch top users again
-
-
-        queryParams = {
-          userId: '',
-          dateFrom: '',
-          dateTo: ''
-        };
-
-        _this4.getTopUsersByTime(queryParams); // reset state
-
-
         _this4.setState({
           // users
           users: [],
@@ -81206,10 +81640,15 @@ function (_Component) {
           // filter chart
           dateFrom: '',
           dateTo: '',
-          userToCompare: null,
+          userIdToCompare: '',
+          userToCompare: '',
           topUsersByTime: [],
           chartType: 'users',
-          project: null
+          project: ''
+        }, function () {
+          _this4.getUsers();
+
+          _this4.getTopUsersByTime();
         });
       })["catch"](function (err) {
         console.log(err);
@@ -81218,114 +81657,99 @@ function (_Component) {
   }, {
     key: "handleSetOrder",
     value: function handleSetOrder(column) {
-      var queryParams = {
-        orderDir: 'asc' // default
+      var _this5 = this;
 
-      };
-      queryParams.orderDir = this.state.orderDir == 'asc' ? 'desc' : 'asc';
-      queryParams.orderBy = column;
-      this.setState({
-        orderBy: queryParams.orderBy,
-        orderDir: queryParams.orderDir
+      this.setState(function (state) {
+        return {
+          orderBy: column,
+          orderDir: state.orderDir == 'asc' ? 'desc' : 'asc'
+        };
+      }, function () {
+        _this5.getUsers();
       });
-      this.getUsers(queryParams);
     }
   }, {
     key: "handleSetPage",
     value: function handleSetPage(page, e) {
-      e.preventDefault();
-      var queryParams = {};
+      var _this6 = this;
 
-      if (page == 'prev') {
-        queryParams.page = this.state.page > 1 ? this.state.page - 1 : 1;
-      } else if (page == 'next') {
-        queryParams.page = this.state.page != this.state.lastPage ? this.state.page + 1 : this.state.lastPage;
-      } else {
-        queryParams.page = page;
-      }
+      e.preventDefault(); // page depends on previous one
 
-      this.setState({
-        page: queryParams.page
+      this.setState(function (state) {
+        if (page == 'prev') {
+          page = state.page > 1 ? state.page - 1 : 1;
+        } else if (page == 'next') {
+          page = state.page != state.lastPage ? state.page + 1 : state.lastPage;
+        }
+
+        return {
+          page: page
+        };
+      }, function () {
+        return _this6.getUsers();
       });
-      this.getUsers(queryParams);
     }
   }, {
     key: "handleDateChange",
     value: function handleDateChange(date, type) {
+      var _this7 = this;
+
+      var newState = {};
+
       if (type == 'from') {
-        this.setState({
-          dateFrom: date
-        });
-        this.getTopUsersByTime({
-          dateFrom: date
-        });
-
-        if (this.state.userToCompare) {
-          this.getTopUsersByTime({
-            userId: this.state.userToCompare.id,
-            dateFrom: date
-          });
-        }
-      } else if (type == 'to') {
-        this.setState({
-          dateTo: date
-        });
-        this.getTopUsersByTime({
-          dateTo: date
-        });
-
-        if (this.state.userToCompare) {
-          this.getTopUsersByTime({
-            userId: this.state.userToCompare.id,
-            dateTo: date
-          });
-        }
+        newState.dateFrom = date;
+      } else {
+        newState.dateTo = date;
       }
+
+      this.setState(newState, function () {
+        return _this7.getTopUsersByTime();
+      });
     }
   }, {
     key: "handleCompareUser",
     value: function handleCompareUser(userId) {
-      this.getTopUsersByTime({
-        userId: userId
+      var _this8 = this;
+
+      this.setState({
+        userIdToCompare: userId
+      }, function () {
+        _this8.getTopUsersByTime();
       });
     }
   }, {
     key: "handleSetChartType",
     value: function handleSetChartType(chartType) {
+      var _this9 = this;
+
       var newState = {
         chartType: chartType
       };
 
       if (chartType == 'users') {
-        newState.project = null;
-        this.getTopUsersByTime({
-          projectId: ''
+        newState.project = '';
+        this.setState(newState, function () {
+          return _this9.getTopUsersByTime();
         });
+      } else {
+        this.setState(newState);
       }
-
-      this.setState(newState);
     }
   }, {
     key: "handleSetProject",
     value: function handleSetProject(project) {
+      var _this10 = this;
+
       this.setState({
         project: project
+      }, function () {
+        return _this10.getTopUsersByTime();
       });
-      this.getTopUsersByTime({
-        projectId: project.id
-      });
-
-      if (this.state.userToCompare) {
-        this.getTopUsersByTime({
-          userId: this.state.userToCompare.id,
-          projectId: project.id
-        });
-      }
     }
   }, {
     key: "render",
     value: function render() {
-      var _this5 = this;
+      var _this11 = this;
 
       return react__WEBPACK_IMPORTED_MODULE_0___default.a.createElement("div", {
         className: "container-fluid mt-5"
@@ -81337,7 +81761,7 @@ function (_Component) {
         dateFrom: this.state.dateFrom,
         dateTo: this.state.dateTo,
         onDateChange: function onDateChange(date, type) {
-          return _this5.handleDateChange(date, type);
+          return _this11.handleDateChange(date, type);
         }
       }), react__WEBPACK_IMPORTED_MODULE_0___default.a.createElement(_Users_Users__WEBPACK_IMPORTED_MODULE_1__["default"], {
         users: this.state.users,
@@ -81346,13 +81770,13 @@ function (_Component) {
         orderBy: this.state.orderBy,
         orderDir: this.state.orderDir,
         onSetPage: function onSetPage(page, e) {
-          return _this5.handleSetPage(page, e);
+          return _this11.handleSetPage(page, e);
         },
         onSetOrder: function onSetOrder(column) {
-          return _this5.handleSetOrder(column);
+          return _this11.handleSetOrder(column);
         },
         onCompareUser: function onCompareUser(userId) {
-          return _this5.handleCompareUser(userId);
+          return _this11.handleCompareUser(userId);
         }
       })), react__WEBPACK_IMPORTED_MODULE_0___default.a.createElement("div", {
         className: "col-12 col-md-6"
@@ -81364,10 +81788,10 @@ function (_Component) {
         chartType: this.state.chartType,
         project: this.state.project,
         onSetChartType: function onSetChartType(chartType) {
-          return _this5.handleSetChartType(chartType);
+          return _this11.handleSetChartType(chartType);
         },
         onSetProject: function onSetProject(project) {
-          return _this5.handleSetProject(project);
+          return _this11.handleSetProject(project);
         }
       }))), react__WEBPACK_IMPORTED_MODULE_0___default.a.createElement("div", {
         className: "row"
@@ -81376,7 +81800,7 @@ function (_Component) {
       }, react__WEBPACK_IMPORTED_MODULE_0___default.a.createElement("button", {
         className: "btn btn-primary d-block m-auto",
         onClick: function onClick() {
-          return _this5.initDatabase();
+          return _this11.initDatabase();
         }
       }, "Init Database"))));
     }
@@ -81829,13 +82253,12 @@ function (_Component) {
 /*!*********************************!*\
   !*** ./resources/js/helpers.js ***!
   \*********************************/
-/*! exports provided: formatDate, buildQueryString */
+/*! exports provided: formatDate */
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
 __webpack_require__.r(__webpack_exports__);
 /* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "formatDate", function() { return formatDate; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "buildQueryString", function() { return buildQueryString; });
 /**
  * Format a JS Date() into 'yyy-mm-dd' string
  * @param date
@@ -81853,17 +82276,6 @@ var formatDate = function formatDate(date) {
   if (month.length < 2) month = '0' + month;
   if (day.length < 2) day = '0' + day;
   return [year, month, day].join('-');
-};
-/**
- * Build URL encoded query string from params object
- * @param queryParams
- * @returns {string}
- */
-
-var buildQueryString = function buildQueryString(queryParams) {
-  return Object.keys(queryParams).map(function (key) {
-    return encodeURIComponent(key) + '=' + encodeURIComponent(queryParams[key]);
-  }).join('&');
 };
 
 /***/ }),

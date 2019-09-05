@@ -3,6 +3,7 @@ import Users from './Users/Users';
 import FilterByDate from './FilterByDate/FilterByDate';
 import TimeChart from './TimeChart/TimeChart';
 import axios from 'axios/index';
+import QueryString from 'query-string';
 import * as helpers from '../helpers.js';
 import './App.css';
 import Swal from 'sweetalert2'
@@ -18,10 +19,11 @@ class App extends Component {
         // filter chart
         dateFrom: '',
         dateTo: '',
-        userToCompare: null,
+        userIdToCompare: '',
+        userToCompare: '',
         topUsersByTime: [],
         chartType: 'users',
-        project: null,
+        project: '',
     };
 
     componentDidMount() {
@@ -29,10 +31,12 @@ class App extends Component {
         this.getTopUsersByTime();
     }
 
-    getUsers(queryParams = {}) {
-        const queryString = this.buildUsersQuery(queryParams);
-        let url = '/api/users';
-        url += queryString ? '?' + queryString : '';
+    getUsers() {
+        const url = '/api/users?' + QueryString.stringify({
+            orderBy: this.state.orderBy,
+            orderDir: this.state.orderDir,
+            page: this.state.page
+        });
 
         axios.get(url).then(res => {
             this.setState({
@@ -45,95 +49,64 @@ class App extends Component {
         })
     }
 
-    getTopUsersByTime(queryParams = {}) {
-        const queryString = this.buildTopUsersByTimeQuery(queryParams);
-        let url = '/api/users/top-by-time';
-        url += queryString ? '?' + queryString : '';
+    getTopUsersByTime() {
+        // always fetch the chart for Top Users because of data consistency if a user is being compared
+        let queryParams = {};
 
+        queryParams.projectId = this.state.project ? this.state.project.id : '';
+        queryParams.dateFrom = helpers.formatDate(this.state.dateFrom);
+        queryParams.dateTo = helpers.formatDate(this.state.dateTo);
+
+        const url = '/api/users/top-by-time?' + QueryString.stringify(queryParams);
         axios.get(url).then(res => {
-
             if (res.data.length == 0) {
-                let message = 'No data found to display on chart';
-
-                if (queryParams.userId) {
-                    message = 'No data found for compared user';
-                }
-
                 Swal.fire({
                     title: 'No Data',
-                    text: message,
+                    text: 'No data found to display on chart',
                     type: 'error',
                     confirmButtonText: 'Okay'
                 });
                 return;
             }
 
-            if (queryParams.userId) {
+            this.setState({
+                topUsersByTime: res.data
+            });
+        }).catch(err => {
+            console.log(err);
+        });
+
+        if (this.state.userIdToCompare) {
+            queryParams.userId = this.state.userIdToCompare;
+            const url = '/api/users/top-by-time?' + QueryString.stringify(queryParams);
+
+            axios.get(url).then(res => {
+                if (res.data.length == 0) {
+                    Swal.fire({
+                        title: 'No Data',
+                        text: 'No data found for compared user',
+                        type: 'error',
+                        confirmButtonText: 'Okay'
+                    });
+                    this.setState({
+                        userToCompare: ''
+                    });
+                    return;
+                }
+
                 this.setState({
                     userToCompare: res.data[0]
                 });
-            }
-            else {
-                this.setState({
-                    topUsersByTime: res.data
-                });
-            }
-        }).catch(err => {
-            console.log(err);
-        })
-    }
 
-    buildUsersQuery(params) {
-        const queryParams = {
-            orderBy: (params.orderBy !== undefined) ? params.orderBy : this.state.orderBy,
-            orderDir: (params.orderDir !== undefined) ? params.orderDir : this.state.orderDir,
-            page: params.page ? params.page : this.state.page
-        };
-
-        return helpers.buildQueryString(queryParams);
-    }
-
-    buildTopUsersByTimeQuery(params) {
-        const queryParams = {};
-
-        if (params.userId) {
-            queryParams.userId = params.userId;
+            }).catch(err => {
+                console.log(err);
+            });
         }
-
-        if (params.projectId !== undefined) {
-            queryParams.projectId = params.projectId;
-        }
-        else if (this.state.project !== null) {
-            queryParams.projectId = this.state.project.id;
-        }
-
-        queryParams.dateFrom = params.dateFrom ? helpers.formatDate(params.dateFrom) : helpers.formatDate(this.state.dateFrom);
-        queryParams.dateTo = params.dateTo ? helpers.formatDate(params.dateTo) : helpers.formatDate(this.state.dateTo);
-
-        return helpers.buildQueryString(queryParams);
     }
 
     initDatabase() {
         // run init db procedure
         axios.post('/api/init-database').then(res => {
-            // fetch the users again
-            let queryParams = {
-                orderBy: '',
-                orderDir: '',
-                page: 1
-            };
-
-            this.getUsers(queryParams);
-
-            // fetch top users again
-            queryParams = {
-                userId: '',
-                dateFrom: '',
-                dateTo: '',
-            };
-            this.getTopUsersByTime(queryParams);
-
-            // reset state
             this.setState({
                 // users
                 users: [],
@@ -144,10 +117,14 @@ class App extends Component {
                 // filter chart
                 dateFrom: '',
                 dateTo: '',
-                userToCompare: null,
+                userIdToCompare: '',
+                userToCompare: '',
                 topUsersByTime: [],
                 chartType: 'users',
-                project: null,
+                project: '',
+            }, () => {
+                this.getUsers();
+                this.getTopUsersByTime();
             });
         }).catch(err => {
             console.log(err);
@@ -155,72 +132,54 @@ class App extends Component {
     }
 
     handleSetOrder(column) {
-        const queryParams = {
-            orderDir: 'asc' // default
-        };
-
-        queryParams.orderDir = (this.state.orderDir == 'asc') ? 'desc' : 'asc';
-        queryParams.orderBy = column;
-
-        this.setState({
-            orderBy: queryParams.orderBy,
-            orderDir: queryParams.orderDir
+        this.setState((state) => {
+            return {
+                orderBy: column,
+                orderDir: (state.orderDir == 'asc') ? 'desc' : 'asc'
+            };
+        }, () => {
+            this.getUsers();
         });
-
-        this.getUsers(queryParams);
     }
 
     handleSetPage(page, e) {
         e.preventDefault();
 
-        const queryParams = {};
+        // page depends on previous one
+        this.setState((state) => {
+            if (page == 'prev') {
+                page = (state.page > 1) ? state.page-1 : 1;
+            }
+            else if (page == 'next') {
+                page = (state.page != state.lastPage) ? state.page+1 : state.lastPage;
+            }
 
-        if (page == 'prev') {
-            queryParams.page = (this.state.page > 1) ? this.state.page-1 : 1;
-        }
-        else if (page == 'next') {
-            queryParams.page = (this.state.page != this.state.lastPage) ? this.state.page+1 : this.state.lastPage;
-        }
-        else {
-            queryParams.page = page;
-        }
+            return {
+                page: page
+            };
 
-        this.setState({
-            page: queryParams.page
-        });
-
-        this.getUsers(queryParams);
+        }, () => this.getUsers());
     }
 
     handleDateChange(date, type) {
+        let newState = {};
+
         if (type == 'from') {
-            this.setState({ dateFrom: date });
-
-            this.getTopUsersByTime({ dateFrom: date });
-
-            if (this.state.userToCompare) {
-                this.getTopUsersByTime({
-                    userId: this.state.userToCompare.id,
-                    dateFrom: date
-                });
-            }
+            newState.dateFrom = date;
         }
-        else if (type == 'to') {
-            this.setState({ dateTo: date });
-
-            this.getTopUsersByTime({ dateTo: date });
-
-            if (this.state.userToCompare) {
-                this.getTopUsersByTime({
-                    userId: this.state.userToCompare.id,
-                    dateTo: date
-                });
-            }
+        else {
+            newState.dateTo = date;
         }
+
+        this.setState(newState, () => this.getTopUsersByTime());
     }
 
     handleCompareUser(userId) {
-        this.getTopUsersByTime({ userId: userId });
+        this.setState({
+            userIdToCompare: userId
+        }, () => {
+            this.getTopUsersByTime();
+        });
     }
 
     handleSetChartType(chartType) {
@@ -229,31 +188,18 @@ class App extends Component {
         };
 
         if (chartType == 'users') {
-            newState.project = null;
-
-            this.getTopUsersByTime({
-                projectId: ''
-            });
+            newState.project = '';
+            this.setState(newState, () => this.getTopUsersByTime());
         }
-
-        this.setState(newState);
+        else {
+            this.setState(newState);
+        }
     }
 
     handleSetProject(project) {
         this.setState({
             project: project
-        });
-
-        this.getTopUsersByTime({
-            projectId: project.id
-        });
-
-        if (this.state.userToCompare) {
-            this.getTopUsersByTime({
-                userId: this.state.userToCompare.id,
-                projectId: project.id
-            });
-        }
+        }, () => this.getTopUsersByTime());
     }
 
     render() {
