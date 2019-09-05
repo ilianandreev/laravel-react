@@ -1,7 +1,7 @@
 import React, { Component } from 'react';
 import Chart from 'react-google-charts';
 import './TimeChart.css';
-import * as helpers from '../../helpers';
+import Moment from 'moment';
 
 export default class TimeChart extends Component {
 
@@ -28,10 +28,10 @@ export default class TimeChart extends Component {
             let title = 'Top 10 Users By Hours ';
 
             if (this.props.dateFrom) {
-                title += ' from ' + helpers.formatDate(this.props.dateFrom);
+                title += ' from ' + Moment(this.props.dateFrom).format('YYYY-MM-DD');
             }
             if (this.props.dateTo) {
-                title += ' to ' + helpers.formatDate(this.props.dateTo);
+                title += ' to ' + Moment(this.props.dateTo).format('YYYY-MM-DD');
             }
 
             chart = <Chart

@@ -1,11 +1,11 @@
 import React, { Component } from 'react';
+import './App.css';
 import Users from './Users/Users';
 import FilterByDate from './FilterByDate/FilterByDate';
 import TimeChart from './TimeChart/TimeChart';
 import axios from 'axios/index';
 import QueryString from 'query-string';
-import * as helpers from '../helpers.js';
-import './App.css';
+import Moment from 'moment';
 import Swal from 'sweetalert2'
 
 class App extends Component {
@@ -46,7 +46,7 @@ class App extends Component {
             });
         }).catch(err => {
             console.log(err);
-        })
+        });
     }
 
     getTopUsersByTime() {
@@ -54,8 +54,8 @@ class App extends Component {
         let queryParams = {};
 
         queryParams.projectId = this.state.project ? this.state.project.id : '';
-        queryParams.dateFrom = helpers.formatDate(this.state.dateFrom);
-        queryParams.dateTo = helpers.formatDate(this.state.dateTo);
+        queryParams.dateFrom = this.state.dateFrom ? Moment(this.state.dateFrom).format('YYYY-MM-DD') : '';
+        queryParams.dateTo = this.state.dateTo ? Moment(this.state.dateFrom).format('YYYY-MM-DD') : '';
 
         const url = '/api/users/top-by-time?' + QueryString.stringify(queryParams);
         axios.get(url).then(res => {
